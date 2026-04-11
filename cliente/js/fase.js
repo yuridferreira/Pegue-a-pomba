@@ -7,7 +7,6 @@ export default class fase extends Phaser.Scene {
     this.scoreRemoto = 0;
     this.tirosRestantes = 10;
     this.botaoTiroPressionado = false;
-    this.ultimoTiro = false;
     this.totalPassarosGerados = 0;
     this.maxPassaros = 15;
   }
@@ -148,6 +147,39 @@ export default class fase extends Phaser.Scene {
     this.input.gamepad.on("down", (pad) => {
       if (pad.buttons[9].pressed) window.location.reload();
     });
+
+    this.input.on("pointermove", (pointer) => {
+      if (this.personagemLocal) {
+        const worldPoint = this.getPointerWorld(pointer);
+        this.personagemLocal.setPosition(worldPoint.x, worldPoint.y);
+      }
+    });
+
+    this.input.on("pointerdown", (pointer, currentlyOver) => {
+      this.botaoTiroPressionado = false;
+      if (this.personagemLocal) {
+        const worldPoint = this.getPointerWorld(pointer);
+        this.personagemLocal.setPosition(worldPoint.x, worldPoint.y);
+      }
+
+      const clickedBird = currentlyOver
+        ? currentlyOver.find(
+            (obj) =>
+              obj.texture &&
+              (obj.texture.key.startsWith("pomba") || obj.texture.key === "corvo")
+          )
+        : null;
+
+      this.handleTiro(pointer, clickedBird || null);
+    });
+
+    this.input.on("pointerup", () => {
+      this.botaoTiroPressionado = false;
+    });
+
+    this.input.on("pointerupoutside", () => {
+      this.botaoTiroPressionado = false;
+    });
   }
 
   criarRevoadaInicial() {
@@ -177,6 +209,7 @@ export default class fase extends Phaser.Scene {
         : "voar-esquerda-" + tipoPassaro;
 
     const passaro = this.passaros.create(x, y, tipoPassaro);
+    this.setupPassaroInteractive(passaro);
 
     const atraso = Math.random() * 5000;
     setTimeout(() => {
@@ -187,7 +220,7 @@ export default class fase extends Phaser.Scene {
     }, atraso);
 
     passaro.direcao = direcao;
-    passaro.acertado = false;
+    passaro.atingido = false;
 
     if (this.game.jogadores.primeiro === this.game.socket.id) {
       passaro.anims.play(animacao, true);
@@ -200,42 +233,6 @@ export default class fase extends Phaser.Scene {
     this.passaros.clear(true, true);
     this.totalPassarosGerados = 0;
     this.criarRevoadaInicial();
-
-    this.passaros.children.iterate((passaro) => {
-      const backgroundY = 190;
-      const backgroundHeight = 380;
-      const topLimit = backgroundY - backgroundHeight / 2;
-      const bottomLimit = backgroundY + backgroundHeight / 2;
-      const y = Phaser.Math.Between(topLimit + 20, bottomLimit - 20);
-      passaro.y = y;
-
-      const direcao = Phaser.Math.Between(0, 1) === 0 ? -1 : 1;
-      const x = direcao === 1 ? -50 : 850;
-      passaro.x = x;
-
-      const atraso = Math.random() * 5000;
-      setTimeout(() => {
-        passaro.setVelocity(
-          Phaser.Math.Between(100, 150) * direcao,
-          Phaser.Math.Between(-80, 80)
-        );
-      }, atraso);
-
-      passaro.direcao = direcao;
-      passaro.acertado = false;
-
-      if (this.game.jogadores.primeiro === this.game.socket.id) {
-        const texturas = ["pomba-branca", "pomba-cinza", "corvo"];
-        passaro.setTexture(texturas[Math.floor(Math.random() * 3)]);
-        const animacao =
-          direcao === 1
-            ? "voar-direita-" + passaro.texture.key
-            : "voar-esquerda-" + passaro.texture.key;
-        passaro.anims.play(animacao, true);
-
-        passaro.setVisible(true);
-      }
-    });
 
     this.tirosRestantes += 10;
     this.tirosText.setText("Tiros: " + this.tirosRestantes);
@@ -250,6 +247,7 @@ export default class fase extends Phaser.Scene {
           frame: p.frame.name,
           visible: p.visible,
           direcao: p.direcao,
+          atingido: p.atingido || false,
         })),
       })
     );
@@ -266,8 +264,11 @@ export default class fase extends Phaser.Scene {
       if (dados.passaros) {
         dados.passaros.forEach((passaro, i) => {
           let p = this.passaros.children.entries[i];
-          if (!p)
+
+          if (!p) {
             p = this.passaros.create(passaro.x, passaro.y, passaro.texture);
+            this.setupPassaroInteractive(p);
+          }
 
           p.x = passaro.x;
           p.y = passaro.y;
@@ -275,22 +276,43 @@ export default class fase extends Phaser.Scene {
           p.setFrame(passaro.frame);
           p.setVisible(passaro.visible);
           p.direcao = passaro.direcao;
+          p.atingido = passaro.atingido || false;
 
-          const anim =
-            p.direcao === 1
-              ? "voar-direita-" + p.texture.key
-              : "voar-esquerda-" + p.texture.key;
-          if (p.visible) {
-            p.anims.play(anim, true);
-          } else {
+          if (p.atingido) {
+            p.setTexture("pomba-branca-caindo");
+            p.setFrame(0);
+            p.setVelocity(0, 0);
+            p.setVelocityY(100);
             p.anims.stop();
+            if (!passaro.visible) {
+              p.setVisible(false);
+            }
+          } else {
+            const anim =
+              p.direcao === 1
+                ? "voar-direita-" + p.texture.key
+                : "voar-esquerda-" + p.texture.key;
+            if (p.visible) {
+              p.anims.play(anim, true);
+            } else {
+              p.anims.stop();
+            }
           }
         });
+
+        if (this.passaros.children.entries.length > dados.passaros.length) {
+          const excesso = this.passaros.children.entries.length - dados.passaros.length;
+          for (let j = 0; j < excesso; j++) {
+            const extra = this.passaros.children.entries.pop();
+            if (extra) extra.destroy(true);
+          }
+        }
       }
 
       if (dados.passaroAtingido !== undefined) {
         const p = this.passaros.children.entries[dados.passaroAtingido];
-        if (p && this.game.socket.id === this.game.jogadores.primeiro) {
+        if (p) {
+          p.atingido = true;
           p.setVelocity(0, 0);
           p.setTexture("pomba-branca-caindo");
           p.setFrame(0);
@@ -311,7 +333,7 @@ export default class fase extends Phaser.Scene {
 
       if (dados.proximaFase) {
         this.scene.stop();
-        this.scene.start(dados.proximaFase, { score: this.score });
+        this.scene.start(dados.proximaFase, { score: dados.score || this.score });
       }
     }
   }
@@ -415,6 +437,71 @@ export default class fase extends Phaser.Scene {
     this.iniciarContagem();
   }
 
+  getPointerWorld(pointer) {
+    return this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+  }
+
+  setupPassaroInteractive(passaro) {
+    passaro.setInteractive({ useHandCursor: true });
+  }
+
+  handleTiro(pointer, clickedPassaro) {
+    if (!this.personagemLocal || this.tirosRestantes <= 0 || this.botaoTiroPressionado) {
+      return;
+    }
+
+    this.fire.play();
+    let acertou = false;
+    const worldPoint = pointer ? this.getPointerWorld(pointer) : null;
+
+    this.passaros.children.entries.forEach((passaro, i) => {
+      if (!passaro.visible || passaro.atingido) return;
+
+      const colidiu = clickedPassaro
+        ? passaro === clickedPassaro
+        : worldPoint
+        ? passaro.getBounds().contains(worldPoint.x, worldPoint.y)
+        : false;
+
+      if (colidiu && !acertou) {
+        acertou = true;
+        passaro.atingido = true;
+
+        if (passaro.texture.key === "pomba-branca") this.score += 50;
+        else if (passaro.texture.key === "pomba-cinza") this.score += 100;
+        else if (passaro.texture.key === "corvo") this.score -= 50;
+        this.scoreText.setText("Pontuação: " + this.score);
+
+        passaro.setTexture("pomba-branca-caindo");
+        passaro.setFrame(0);
+        passaro.setVelocity(0, 0);
+        passaro.setVelocityY(100);
+        passaro.anims.stop();
+        this.time.delayedCall(800, () => {
+          passaro.setVisible(false);
+        });
+
+        if (this.game.dadosJogo && this.game.dadosJogo.readyState === "open") {
+          this.game.dadosJogo.send(
+            JSON.stringify({
+              cena: this.game.cenaAtual,
+              passaroAtingido: i,
+              novoScore: this.score,
+            })
+          );
+        }
+      }
+    });
+
+    if (acertou) {
+      this.game.registry.set("score", this.score);
+    }
+
+    this.tirosRestantes--;
+    this.tirosText.setText("Tiros: " + this.tirosRestantes);
+    this.botaoTiroPressionado = true;
+  }
+
   iniciarContagem(callback) {
     let i = 5;
     this.contador = this.add
@@ -471,6 +558,7 @@ export default class fase extends Phaser.Scene {
                 frame: p.frame.name,
                 visible: p.visible,
                 direcao: p.direcao,
+                atingido: p.atingido || false,
               })),
             })
           );
@@ -493,7 +581,7 @@ export default class fase extends Phaser.Scene {
 
         // Inverter direção horizontal se sair da tela
         if (passaro.x < -50 || passaro.x > 850) {
-          passaro.direcao *= -1;
+          passaro.direcao = passaro.x < -50 ? 1 : -1;
           passaro.setVelocityX(passaro.direcao * Phaser.Math.Between(100, 150));
           passaro.anims.play(
             passaro.direcao === 1
@@ -541,19 +629,14 @@ export default class fase extends Phaser.Scene {
             else if (passaro.texture.key === "corvo") this.score -= 50;
             this.scoreText.setText("Pontuação: " + this.score);
 
-            if (this.game.socket.id === this.game.jogadores.primeiro) {
-              passaro.setTexture("pomba-branca-caindo");
-              passaro.setFrame(0);
-              passaro.setVelocityY(100);
-              this.time.delayedCall(800, () => passaro.setVisible(false));
-
-              passaro.once("animationcomplete", () => {
-                console.log("Animação de queda concluída");
-                passaro.setVisible(false);
-                passaro.atingido = false; // Opcional, caso queira resetar futuramente
-                passaro.setVelocity(0, 0);
-              });
-            }
+            passaro.setTexture("pomba-branca-caindo");
+            passaro.setFrame(0);
+            passaro.setVelocity(0, 0);
+            passaro.setVelocityY(100);
+            passaro.anims.stop();
+            this.time.delayedCall(800, () => {
+              passaro.setVisible(false);
+            });
 
             // Envia mensagem para o outro jogador
             if (
@@ -585,18 +668,20 @@ export default class fase extends Phaser.Scene {
         this.botaoTiroPressionado = false;
       }
     }
-    // Verifica se o jogador 1 venceu
-    if (this.game.jogadores.primeiro === this.game.socket.id) {
-      if (this.score >= 2000) {
+    // Verifica se o jogador alcançou a pontuação de vitória
+    if (this.score >= 2000) {
+      if (this.game.dadosJogo && this.game.dadosJogo.readyState === "open") {
         this.game.dadosJogo.send(
           JSON.stringify({
+            cena: this.game.cenaAtual,
             proximaFase: "gameover",
+            score: this.score,
           })
         );
-
-        this.scene.stop();
-        this.scene.start("finalfeliz", { score: this.score });
       }
+
+      this.scene.stop();
+      this.scene.start("finalfeliz", { score: this.score });
     }
   }
 }
